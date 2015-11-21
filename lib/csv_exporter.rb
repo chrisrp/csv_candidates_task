@@ -2,46 +2,48 @@
 require 'net/sftp'
 require 'iconv'
 require 'csv'
+require 'sftp_helper'
+
+LOCAL_UPLOAD_DIR     = "#{Rails.root.to_s}/private/data/upload"
+LOCAL_DOWNLOAD_DIR   = "#{Rails.root.to_s}/private/data/download"
+REMOTE_CSVS_DIR      = "/data/files/csv"
+REMOTE_PROCESSED_DIR = "/data/files/batch_processed"
 
 class CsvExporter
 
-  @sftp_server = Rails.env == 'production' ? 'csv.example.com/endpoint/' : '0.0.0.0:2020'
+#  @sftp_server = Rails.env == 'production' ? 'csv.example.com/endpoint/' : '0.0.0.0:2020'
   @errors = []
 
   cattr_accessor :import_retry_count
 
   def self.transfer_and_import(send_email = true)
     @errors = []
-    FileUtils.mkdir_p "#{Rails.root.to_s}/private/data"
-    FileUtils.mkdir_p "#{Rails.root.to_s}/private/data/download"
 
-    Net::SFTP.start(@sftp_server, "some-ftp-user", :keys => ["path-to-credentials"]) do |sftp|
-      sftp_entries = sftp.dir.entries("/data/files/csv").map{ |e| e.name }.sort
-      sftp_entries.each do |entry|
-        next unless entry[-4, 4] == '.csv'
-        next unless sftp.dir.entries("/data/files/csv").map{ |e| e.name }.include?(entry + '.start')
+    create_dirs
 
-        file_local = "#{Rails.root.to_s}/private/data/download/#{entry}"
-        file_remote = "/data/files/csv/#{entry}"
+    sftp_entries = SftpHelper.get_entries(REMOTE_CSVS_DIR).map{ |e| e.name }.sort
+    sftp_entries.each do |entry|
+      next unless is_processable?(entry, sftp_entries)
 
-        sftp.download!(file_remote, file_local)
-        sftp.remove!(file_remote + '.start')
+      file_local = File.join(LOCAL_DOWNLOAD_DIR, entry)
+      file_remote = File.join(REMOTE_CSVS_DIR, entry)
 
-        result = import(file_local)
+      SftpHelper.download!(file_remote, file_local)
+      SftpHelper.remove!(file_remote + '.start')
 
-        if result == 'Success'
-          File.delete(file_local)
-          BackendMailer.send_import_feedback('Successful Import', "Import of the file #{entry} done.") if send_email
-        else
-          error_content = ["Import of the file #{entry} failed with errors:", result].join("\n")
-          upload_error_file(entry, error_content)
-          BackendMailer.send_import_feedback('Import CSV failed', error_content) if send_email
-          break
-        end
+      result = import(file_local)
+
+      if result == 'Success'
+        File.delete(file_local)
+        BackendMailer.send_import_feedback('Successful Import', "Import of the file #{entry} done.") if send_email
+      else
+        error_content = ["Import of the file #{entry} failed with errors:", result].join("\n")
+        upload_error_file(entry, error_content)
+        BackendMailer.send_import_feedback('Import CSV failed', error_content) if send_email
+        break
       end
     end
   end
-
 
   def self.import(file, validation_only = false)
     begin
@@ -64,19 +66,18 @@ class CsvExporter
   def self.import_file(file, validation_only = false)
     @errors = []
     line = 2
-    source_path = "#{Rails.root.to_s}/private/upload"
-    path_and_name = "#{source_path}/csv/tmp_mraba/DTAUS#{Time.now.strftime('%Y%m%d_%H%M%S')}"
-
-    FileUtils.mkdir_p "#{source_path}/csv"
-    FileUtils.mkdir_p "#{source_path}/csv/tmp_mraba"
+    path_and_name = "#{LOCAL_UPLOAD_DIR}/csv/tmp_mraba/DTAUS#{Time.now.strftime('%Y%m%d_%H%M%S')}"
 
     @dtaus = Mraba::Transaction.define_dtaus('RS', 8888888888, 99999999, 'Credit collection')
     success_rows = []
-    import_rows = CSV.read(file, { :col_sep => ';', :headers => true, :skip_blanks => true } ).map{ |r| [r.to_hash['ACTIVITY_ID'], r.to_hash] }
+
+    import_rows = CSV.read(file, { :col_sep => ';', :headers => true, :skip_blanks => true } ).map do |r|
+      [r.to_hash['ACTIVITY_ID'], r.to_hash]
+    end
 
     import_rows.each do |index, row|
       next if index.blank?
-      break unless validate_import_row(row)
+      break unless valid_row?(row)
       errors, dtaus = import_file_row_with_error_handling(row, validation_only, @errors, @dtaus)
       line += 1
       break unless @errors.empty?
@@ -120,7 +121,7 @@ class CsvExporter
     [errors, dtaus]
   end
 
-  def self.validate_import_row(row)
+  def self.valid_row?(row)
     errors = []
     @errors << "#{row['ACTIVITY_ID']}: UMSATZ_KEY #{row['UMSATZ_KEY']} is not allowed" unless %w(10 16).include?row['UMSATZ_KEY']
     @errors += errors
@@ -149,7 +150,6 @@ class CsvExporter
 
     sender
   end
-
 
   def self.add_account_transfer(row, validation_only)
     sender = get_sender(row)
@@ -218,15 +218,34 @@ class CsvExporter
   private
 
   def self.upload_error_file(entry, result)
-    FileUtils.mkdir_p "#{Rails.root.to_s}/private/data/upload"
-    error_file = "#{Rails.root.to_s}/private/data/upload/#{entry}"
+    error_file = File.join(LOCAL_UPLOAD_DIR, entry)
+
     File.open(error_file, "w") do |f|
       f.write(result)
     end
+
     Net::SFTP.start(@sftp_server, "some-ftp-user", :keys => ["path-to-credentials"]) do |sftp|
-      sftp.upload!(error_file, "/data/files/batch_processed/#{entry}")
+      sftp.upload!(error_file, File.join(REMOTE_PROCESSED_DIR, entry))
     end
   end
 
+  def self.create_dirs
+    FileUtils.mkdir_p LOCAL_UPLOAD_DIR
+    FileUtils.mkdir_p LOCAL_DOWNLOAD_DIR
+    FileUtils.mkdir_p "#{LOCAL_UPLOAD_DIR}/csv/tmp_mraba"
+  end
+
+  def self.is_processable?(file, files)
+    is_csv?(file) && exists_start_file?(file, files)
+  end
+
+
+  def self.is_csv?(file_name)
+    file_name[-4, 4] == '.csv'
+  end
+
+  def self.exists_start_file?(file, files)
+    files.include?(file + '.start')
+  end
 end
 
