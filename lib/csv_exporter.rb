@@ -92,6 +92,7 @@ class CsvExporter
   end
 
   def self.import_file_row(row, validation_only, errors, dtaus)
+    #TODO: replace conditional with subclass
     case transaction_type(row)
       when 'AccountTransfer' then add_account_transfer(row, validation_only)
       when 'BankTransfer' then add_bank_transfer(row, validation_only)
@@ -122,6 +123,7 @@ class CsvExporter
   end
 
   def self.valid_row?(row)
+    #OMG
     errors = []
     @errors << "#{row['ACTIVITY_ID']}: UMSATZ_KEY #{row['UMSATZ_KEY']} is not allowed" unless %w(10 16).include?row['UMSATZ_KEY']
     @errors += errors
@@ -218,15 +220,9 @@ class CsvExporter
   private
 
   def self.upload_error_file(entry, result)
-    error_file = File.join(LOCAL_UPLOAD_DIR, entry)
-
-    File.open(error_file, "w") do |f|
-      f.write(result)
-    end
-
-    Net::SFTP.start(@sftp_server, "some-ftp-user", :keys => ["path-to-credentials"]) do |sftp|
-      sftp.upload!(error_file, File.join(REMOTE_PROCESSED_DIR, entry))
-    end
+    SftpHelper.upload_content!(File.join(LOCAL_UPLOAD_DIR, entry),
+                               result,
+                               File.join(REMOTE_PROCESSED_DIR, entry))
   end
 
   def self.create_dirs
@@ -241,7 +237,7 @@ class CsvExporter
 
 
   def self.is_csv?(file_name)
-    file_name[-4, 4] == '.csv'
+    File.extname(file_name) == '.csv'
   end
 
   def self.exists_start_file?(file, files)

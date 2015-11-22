@@ -1,11 +1,10 @@
 class SftpHelper
 
-  def self.upload_content!(file_name, content, remote_path)
-    local_file = File.join('/tmp', file_name)
-    File.open(local_file, 'w') { |f| f.write content }
+  def self.upload_content!(full_file_path, content, remote_path)
+    File.open(full_file_path, 'w') { |f| f.write content }
 
     connect do |sftp|
-      sftp.upload!(local_file, remote_path)
+      sftp.upload!(full_file_path, remote_path)
     end
   end
 
