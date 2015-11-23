@@ -48,11 +48,11 @@ class Transaction
 
   def transaction_type
     if sender_blz == '00000000' && receiver_blz == '00000000'
-      return 'AccountTransfer'
+      'AccountTransfer'
     elsif sender_blz == '00000000' && umsatz_key == '10'
-      return 'BankTransfer'
-    elsif receiver_blz == '70022200' && '16' == umsatz_key
-      return 'Lastschrift'
+      'BankTransfer'
+    elsif receiver_blz == '70022200' &&  umsatz_key == '16'
+      'Lastschrift'
     end
   end
 

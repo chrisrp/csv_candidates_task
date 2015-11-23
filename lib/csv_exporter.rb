@@ -76,6 +76,7 @@ class CsvExporter
     end
 
     import_rows.each do |index, row|
+      #adding transaction object
       transaction = Transaction.new(row)
       next if index.blank?
       break unless valid_row?(transaction)
@@ -94,12 +95,11 @@ class CsvExporter
   end
 
   def self.import_file_row(row, validation_only, errors, dtaus)
-    #TODO: replace conditional with subclass
+    #TODO: probably replace conditional with subclass
     case transaction_type(row)
       when 'AccountTransfer' then add_account_transfer(row, validation_only)
       when 'BankTransfer' then add_bank_transfer(row, validation_only)
       when 'Lastschrift' then add_dta_row(dtaus, row, validation_only)
-      #else errors << "#{row['ACTIVITY_ID']}: Transaction type not found"
     end
 
     [errors, dtaus]
@@ -107,20 +107,15 @@ class CsvExporter
 
   def self.import_file_row_with_error_handling(row, validation_only, errors, dtaus)
     error_text = nil
-    self.import_retry_count = 0
-    5.times do
-      self.import_retry_count += 1
-      error_text = nil
-      begin
-        import_file_row(row, validation_only, errors, dtaus)
-        break
-      rescue => e
-        error_text = "#{row['ACTIVITY_ID']}: #{e.to_s}"
-        break
-      end
+    begin
+      import_file_row(row, validation_only, errors, dtaus)
+    rescue => e
+      error_text = "#{row['ACTIVITY_ID']}: #{e.to_s}"
     end
+
     errors << error_text if error_text
 
+    # weird there is a test checking this...
     [errors, dtaus]
   end
 
