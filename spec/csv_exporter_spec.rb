@@ -54,7 +54,7 @@ describe CsvExporter do
       sftp_mock.stub(:upload!).with("#{Rails.root}/private/data/upload/mraba.csv", "/data/files/batch_processed/mraba.csv").once
     end
 
-    it "fails transfers and imports mraba csv  " do
+    it "fails transfers and imports mraba csv" do
       CsvExporter.should_receive(:upload_error_file).once.and_call_original
       File.should_receive(:open).with("#{Rails.root}/private/data/download/mraba.csv",  {:universal_newline=>false, :col_sep=>";", :headers=>true, :skip_blanks=>true}).once.and_call_original
       File.should_receive(:open).with("#{Rails.root}/private/data/upload/mraba.csv", "w").once.and_call_original
@@ -282,6 +282,13 @@ describe CsvExporter do
 
     it "returns subject from row" do
       CsvExporter.import_subject(@row).should == "Subject"
+    end
+  end
+
+  describe 'model' do
+    it 'create model' do
+      t = Transaction.new( { 'AMOUNT' => 10 })
+      expect(t.amount).to eq 10
     end
   end
 

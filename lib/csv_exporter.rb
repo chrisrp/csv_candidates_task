@@ -3,6 +3,8 @@ require 'net/sftp'
 require 'iconv'
 require 'csv'
 require 'sftp_helper'
+require 'active_model'
+require 'model/transaction'
 
 LOCAL_UPLOAD_DIR     = "#{Rails.root.to_s}/private/data/upload"
 LOCAL_DOWNLOAD_DIR   = "#{Rails.root.to_s}/private/data/download"
@@ -11,7 +13,6 @@ REMOTE_PROCESSED_DIR = "/data/files/batch_processed"
 
 class CsvExporter
 
-#  @sftp_server = Rails.env == 'production' ? 'csv.example.com/endpoint/' : '0.0.0.0:2020'
   @errors = []
 
   cattr_accessor :import_retry_count
@@ -53,7 +54,6 @@ class CsvExporter
     end
 
     if result[:errors].blank?
-      result = "Success"
     else
       result = "Imported: #{result[:success].join(', ')} Errors: #{result[:errors].join('; ')}"
     end
@@ -65,22 +65,24 @@ class CsvExporter
 
   def self.import_file(file, validation_only = false)
     @errors = []
+    success_rows = []
     line = 2
+
     path_and_name = "#{LOCAL_UPLOAD_DIR}/csv/tmp_mraba/DTAUS#{Time.now.strftime('%Y%m%d_%H%M%S')}"
 
     @dtaus = Mraba::Transaction.define_dtaus('RS', 8888888888, 99999999, 'Credit collection')
-    success_rows = []
-
     import_rows = CSV.read(file, { :col_sep => ';', :headers => true, :skip_blanks => true } ).map do |r|
       [r.to_hash['ACTIVITY_ID'], r.to_hash]
     end
 
     import_rows.each do |index, row|
+      transaction = Transaction.new(row)
       next if index.blank?
-      break unless valid_row?(row)
-      errors, dtaus = import_file_row_with_error_handling(row, validation_only, @errors, @dtaus)
+      break unless valid_row?(transaction)
+
+      import_file_row_with_error_handling(row, validation_only, @errors, @dtaus)
       line += 1
-      break unless @errors.empty?
+      reak unless @errors.empty?
       success_rows << row['ACTIVITY_ID']
     end
 
@@ -97,7 +99,7 @@ class CsvExporter
       when 'AccountTransfer' then add_account_transfer(row, validation_only)
       when 'BankTransfer' then add_bank_transfer(row, validation_only)
       when 'Lastschrift' then add_dta_row(dtaus, row, validation_only)
-      else errors << "#{row['ACTIVITY_ID']}: Transaction type not found"
+      #else errors << "#{row['ACTIVITY_ID']}: Transaction type not found"
     end
 
     [errors, dtaus]
@@ -123,9 +125,11 @@ class CsvExporter
   end
 
   def self.valid_row?(row)
-    #OMG
     errors = []
-    @errors << "#{row['ACTIVITY_ID']}: UMSATZ_KEY #{row['UMSATZ_KEY']} is not allowed" unless %w(10 16).include?row['UMSATZ_KEY']
+    unless row.valid?
+      errors = row.errors.messages.values.flatten
+    end
+
     @errors += errors
 
     errors.size == 0
