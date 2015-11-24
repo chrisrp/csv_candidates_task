@@ -13,18 +13,17 @@ REMOTE_PROCESSED_DIR = "/data/files/batch_processed"
 
 class CsvExporter
 
-  @errors = []
-
-  cattr_accessor :import_retry_count
+  def self.get_entries
+    @entries ||= SftpHelper.get_entries(REMOTE_CSVS_DIR).map{ |e| e.name }
+  end
 
   def self.transfer_and_import(send_email = true)
     @errors = []
 
     create_dirs
 
-    sftp_entries = SftpHelper.get_entries(REMOTE_CSVS_DIR).map{ |e| e.name }.sort
-    sftp_entries.each do |entry|
-      next unless is_processable?(entry, sftp_entries)
+    get_entries.each do |entry|
+      next unless is_csv_processable?(entry, get_entries)
 
       file_local = File.join(LOCAL_DOWNLOAD_DIR, entry)
       file_remote = File.join(REMOTE_CSVS_DIR, entry)
@@ -54,6 +53,7 @@ class CsvExporter
     end
 
     if result[:errors].blank?
+      result = 'Success'
     else
       result = "Imported: #{result[:success].join(', ')} Errors: #{result[:errors].join('; ')}"
     end
@@ -63,32 +63,34 @@ class CsvExporter
     result
   end
 
+  def self.get_rows(file)
+    CSV.read(file, { :col_sep => ';', :headers => true, :skip_blanks => true } ).map do |r|
+          [r.to_hash['ACTIVITY_ID'], r.to_hash]
+        end
+  end
+
   def self.import_file(file, validation_only = false)
     @errors = []
     success_rows = []
-    line = 2
 
     path_and_name = "#{LOCAL_UPLOAD_DIR}/csv/tmp_mraba/DTAUS#{Time.now.strftime('%Y%m%d_%H%M%S')}"
 
     @dtaus = Mraba::Transaction.define_dtaus('RS', 8888888888, 99999999, 'Credit collection')
-    import_rows = CSV.read(file, { :col_sep => ';', :headers => true, :skip_blanks => true } ).map do |r|
-      [r.to_hash['ACTIVITY_ID'], r.to_hash]
-    end
+    get_rows(file).each do |_, row|
 
-    import_rows.each do |index, row|
       #adding transaction object
       transaction = Transaction.new(row)
-      next if index.blank?
+      next if transaction.activity_id.blank?
       break unless valid_row?(transaction)
 
       import_file_row_with_error_handling(row, validation_only, @errors, @dtaus)
-      line += 1
-      reak unless @errors.empty?
-      success_rows << row['ACTIVITY_ID']
+
+      break unless @errors.empty?
+      success_rows << transaction.activity_id
     end
 
     if @errors.empty? and !validation_only
-      @dtaus.add_datei("#{path_and_name}_201_mraba.csv") unless @dtaus.is_empty?
+      @dtaus.add_datei("#{path_and_name}_201_mraba.csv") unless @dtaus.empty?
     end
 
     {:success => success_rows, :errors => @errors}
@@ -130,6 +132,7 @@ class CsvExporter
     errors.size == 0
   end
 
+  #TODO: remove this method and use Transaction#transaction_type
   def self.transaction_type(row)
     if row['SENDER_BLZ'] == '00000000' and row['RECEIVER_BLZ'] == '00000000'
       return 'AccountTransfer'
@@ -230,7 +233,7 @@ class CsvExporter
     FileUtils.mkdir_p "#{LOCAL_UPLOAD_DIR}/csv/tmp_mraba"
   end
 
-  def self.is_processable?(file, files)
+  def self.is_csv_processable?(file, files)
     is_csv?(file) && exists_start_file?(file, files)
   end
 

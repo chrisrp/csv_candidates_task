@@ -23,3 +23,4 @@ end
 RSpec.configure do |config|
 end
 
+require File.expand_path(File.dirname(__FILE__) + "/../lib/csv_exporter")

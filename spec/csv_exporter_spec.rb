@@ -1,6 +1,5 @@
 # encoding: utf-8
 require 'spec_helper'
-require_relative '../lib/csv_exporter'
 
 # Fakes for outside objects
 class Account
@@ -22,6 +21,9 @@ module Mraba
 
     def add_datei(*)
     end
+
+    def empty?
+    end
   end
 end
 
@@ -33,6 +35,7 @@ module BackendMailer
 end
 
 describe CsvExporter do
+  let(:entries) { ["mraba.csv", "mraba.csv.start", "blubb.csv"] }
 
   describe ".transfer_and_import(send_email = true)" do
     before(:all) do
@@ -45,7 +48,6 @@ describe CsvExporter do
     end
 
     before(:each) do
-      entries = ["mraba.csv", "mraba.csv.start", "blubb.csv"]
       sftp_mock = double('sftp')
       Net::SFTP.stub(:start).and_yield(sftp_mock)
       sftp_mock.stub_chain(:dir, :entries, :map).and_return(entries)
@@ -73,26 +75,42 @@ describe CsvExporter do
       CsvExporter.transfer_and_import
     end
 
-    it "transfers and imports mraba csv" do
-      data = {
-        'DEPOT_ACTIVITY_ID' => "",
-        'AMOUNT' => "5",
-        'UMSATZ_KEY' => "10",
-        'ENTRY_DATE' => Time.now.strftime('%Y%m%d'),
-        'KONTONUMMER' => '000000001',
-        'RECEIVER_BLZ' => '00000000',
-        'RECEIVER_KONTO' => '000000002',
-        'RECEIVER_NAME' => 'Mustermann',
-        'SENDER_BLZ' => '00000000',
-        'SENDER_KONTO' => '000000003',
-        'SENDER_NAME' => 'Mustermann',
-        'DESC1' => "Geld senden"
-      }
+    context 'when transaction is AccountTransfer' do
+      let(:data) do
+        [ {
+          'ACTIVITY_ID' => "01",
+          'DEPOT_ACTIVITY_ID' => "",
+          'AMOUNT' => "5",
+          'UMSATZ_KEY' => "10",
+          'ENTRY_DATE' => Time.now.strftime('%Y%m%d'),
+          'KONTONUMMER' => '000000001',
+          'RECEIVER_BLZ' => '00000000',
+          'RECEIVER_KONTO' => '000000002',
+          'RECEIVER_NAME' => 'Mustermann',
+          'SENDER_BLZ' => '00000000',
+          'SENDER_KONTO' => '000000003',
+          'SENDER_NAME' => 'Mustermann',
+          'DESC1' => "Geld senden"
+        }]
+      end
 
-      CSV.stub_chain(:read, :map).and_return [ ["123", data ] ]
+      it "transfers and imports mraba csv" do
+        account = double
+        account_transfer = double :date= => nil,
+          :skip_mobile_tan= => nil,
+          :valid? => true,
+          :errors => double(:full_messages => []),
+          :save! => true
 
-      BackendMailer.should_receive(:send_import_feedback)
-      CsvExporter.transfer_and_import.should be_nil
+        account.stub_chain :credit_account_transfers,
+          :build => account_transfer
+
+        allow(Account).to receive(:find_by_account_no).with('000000003') { account }
+        expect(BackendMailer).to receive(:send_import_feedback).with('Successful Import', 'Import of the file mraba.csv done.')
+        allow(CSV).to receive(:read) { data }
+
+        CsvExporter.transfer_and_import
+      end
     end
   end
 
@@ -288,13 +306,5 @@ describe CsvExporter do
       CsvExporter.import_subject(@row).should == "Subject"
     end
   end
-
-  describe 'model' do
-    it 'create model' do
-      t = Transaction.new( { 'AMOUNT' => 10 })
-      expect(t.amount).to eq 10
-    end
-  end
-
 
 end
